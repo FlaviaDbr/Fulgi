@@ -894,7 +894,7 @@
                 ctx.beginPath();
                 ctx.roundRect(b.x, b.y, b.w, b.h, 12);
                 ctx.fill();
-                ctx.globalAlpha = pressed ? 1.0 : 0.7;
+                ctx.globalAlpha = 0.7;
                 ctx.fillStyle   = '#111';
                 ctx.font        = `bold ${b.label.length > 2 ? 13 : 22}px ${FONT}`;
                 ctx.textAlign   = 'center';
