@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Llama Cereal Runner</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -56,19 +56,28 @@
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
 
-        // Scale canvas to fill window while preserving 900×420 aspect ratio
+        // Scale canvas to fill window while preserving 900×420 aspect ratio.
+        // Uses visualViewport when available — gives accurate dimensions on mobile
+        // even when the browser chrome (address bar) is visible.
         function fitToWindow() {
-            const scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+            const vw = (window.visualViewport ? window.visualViewport.width  : window.innerWidth);
+            const vh = (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+            const scale  = Math.min(vw / W, vh / H);
             const scaledW = Math.floor(W * scale);
             const scaledH = Math.floor(H * scale);
             canvas.style.width  = scaledW + 'px';
             canvas.style.height = scaledH + 'px';
-            canvas.style.left   = Math.floor((window.innerWidth  - scaledW) / 2) + 'px';
-            canvas.style.top    = Math.floor((window.innerHeight - scaledH) / 2) + 'px';
+            canvas.style.left   = Math.floor((vw - scaledW) / 2) + 'px';
+            canvas.style.top    = Math.floor((vh - scaledH) / 2) + 'px';
             canvas.style.transform = '';
         }
         fitToWindow();
         window.addEventListener('resize', fitToWindow);
+        // Orientation change: browser needs ~300 ms to update its dimensions
+        window.addEventListener('orientationchange', () => setTimeout(fitToWindow, 300));
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', fitToWindow);
+        }
         const FONT = '"Intel One Mono", "Courier New", monospace';
 
         // --- Assets ---
@@ -284,37 +293,36 @@
 
         // --- Microphone: sharp sound spike → spit (Web Audio API, <30ms latency) ---
         let micState = 'off';
-        document.addEventListener('keydown', function startMic() {
+        let micStarted = false;
+        function startMic() {
+            if (micStarted) return;
+            micStarted = true;
             navigator.mediaDevices.getUserMedia({ audio: true, video: false })
                 .then(stream => {
                     const AudioCtx = window.AudioContext || window.webkitAudioContext;
                     const actx     = new AudioCtx();
                     const analyser = actx.createAnalyser();
                     analyser.fftSize = 1024;
-                    analyser.smoothingTimeConstant = 0.0; // no smoothing — we want raw spikes
+                    analyser.smoothingTimeConstant = 0.0;
                     actx.createMediaStreamSource(stream).connect(analyser);
 
                     const buf = new Uint8Array(analyser.fftSize);
-                    let baseline = 0.02; // RMS floor — updates slowly
-                    let spikeCD  = 0;   // cooldown in frames
+                    let baseline = 0.02;
+                    let spikeCD  = 0;
 
                     function tick() {
                         analyser.getByteTimeDomainData(buf);
-                        // RMS of the current frame
                         let sum = 0;
                         for (let i = 0; i < buf.length; i++) {
                             const v = (buf[i] - 128) / 128;
                             sum += v * v;
                         }
                         const rms = Math.sqrt(sum / buf.length);
-
-                        // Drift baseline upward slowly so ambient noise doesn't trigger
                         baseline = baseline * 0.98 + rms * 0.02;
-
                         if (spikeCD > 0) { spikeCD--; }
                         else if (rms > Math.max(baseline * 4, 0.07)) {
                             triggerSpit();
-                            spikeCD = 30; // ~500 ms cooldown
+                            spikeCD = 30;
                         }
                         requestAnimationFrame(tick);
                     }
@@ -322,8 +330,10 @@
                     micState = 'listening';
                 })
                 .catch(() => { micState = 'off'; });
-            document.removeEventListener('keydown', startMic);
-        }, { once: true });
+        }
+        // Start on first keyboard press OR first tap — whichever comes first
+        document.addEventListener('keydown',   startMic, { once: true });
+        document.addEventListener('touchstart', startMic, { once: true });
 
         // --- Input ---
         const keys = {};
@@ -369,12 +379,10 @@
         // --- Touch controls ---
         const isTouch = navigator.maxTouchPoints > 0;
 
-        // Button layout in game coordinates (drawn bottom corners)
+        // Only action buttons — movement uses half-screen tap zones instead
         const VBTNS = [
-            { id:'left',  x:16,    y:H-86, w:72, h:70, label:'◀' },
-            { id:'right', x:98,    y:H-86, w:72, h:70, label:'▶' },
-            { id:'spit',  x:W-186, y:H-86, w:82, h:70, label:'PTIU' },
-            { id:'jump',  x:W-96,  y:H-86, w:82, h:70, label:'↑' },
+            { id:'spit', x:16,   y:H-86, w:82, h:70, label:'PTIU' },
+            { id:'jump', x:W-96, y:H-86, w:82, h:70, label:'↑'    },
         ];
 
         function touchToGame(touch) {
@@ -397,14 +405,24 @@
         let prevTouchIds = new Set();
         function handleTouches(e) {
             e.preventDefault();
-            if (state === 'start') { reset(); return; }
+            if (state === 'start')       { reset(); return; }
             if (state === 'leaderboard') { reset(); return; }
-            if (state === 'name_input') return; // handled by HTML input
+            if (state === 'name_input')  return;
 
-            const cur = activeBtnIds(e.touches);
+            const curBtns = activeBtnIds(e.touches);
+            let moveLeft = false, moveRight = false;
 
-            // Detect fresh presses (newly touched this event)
-            for (const id of cur) {
+            for (const t of e.touches) {
+                const g = touchToGame(t);
+                const onBtn = btnAt(g.x, g.y).length > 0;
+                if (!onBtn) {
+                    if (g.x < W / 2) moveLeft  = true;
+                    else             moveRight = true;
+                }
+            }
+
+            // Fire actions on fresh button presses
+            for (const id of curBtns) {
                 if (!prevTouchIds.has(id)) {
                     if (id === 'jump' && player.onGround && state === 'playing') {
                         player.vy = JUMP_V; player.onGround = false;
@@ -412,16 +430,25 @@
                     if (id === 'spit') triggerSpit();
                 }
             }
-            keys['ArrowLeft']  = cur.has('left');
-            keys['ArrowRight'] = cur.has('right');
-            prevTouchIds = cur;
+
+            keys['ArrowLeft']  = moveLeft;
+            keys['ArrowRight'] = moveRight;
+            prevTouchIds = curBtns;
         }
         function handleTouchEnd(e) {
             e.preventDefault();
-            const cur = activeBtnIds(e.touches);
-            keys['ArrowLeft']  = cur.has('left');
-            keys['ArrowRight'] = cur.has('right');
-            prevTouchIds = cur;
+            const curBtns = activeBtnIds(e.touches);
+            let moveLeft = false, moveRight = false;
+            for (const t of e.touches) {
+                const g = touchToGame(t);
+                if (btnAt(g.x, g.y).length === 0) {
+                    if (g.x < W / 2) moveLeft  = true;
+                    else             moveRight = true;
+                }
+            }
+            keys['ArrowLeft']  = moveLeft;
+            keys['ArrowRight'] = moveRight;
+            prevTouchIds = curBtns;
         }
         canvas.addEventListener('touchstart', handleTouches, { passive: false });
         canvas.addEventListener('touchmove',  handleTouches, { passive: false });
@@ -862,9 +889,7 @@
         function drawTouchButtons() {
             ctx.save();
             for (const b of VBTNS) {
-                const pressed = (b.id==='left'  && keys['ArrowLeft']) ||
-                                (b.id==='right' && keys['ArrowRight']);
-                ctx.globalAlpha = pressed ? 0.75 : 0.42;
+                ctx.globalAlpha = 0.42;
                 ctx.fillStyle   = '#fff';
                 ctx.beginPath();
                 ctx.roundRect(b.x, b.y, b.w, b.h, 12);
