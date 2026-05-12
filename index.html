@@ -274,8 +274,11 @@
         // --- Spit helper (keyboard + mic both call this) ---
         function triggerSpit() {
             if (state !== 'playing' || spitCD > 0) return;
-            spits.push({ wx: player.wx + CHAR_W/2, y: player.y - CHAR_H*0.60,
-                         fading: false, alpha: 1.0 });
+            const dir = player.facingRight ? 1 : -1;
+            const wx  = player.facingRight
+                ? player.wx + CHAR_W/2
+                : player.wx - CHAR_W/2 - SPIT_W;
+            spits.push({ wx, y: player.y - CHAR_H*0.60, dir, fading: false, alpha: 1.0 });
             spitCD = SPIT_COOLDOWN;
         }
 
@@ -560,7 +563,7 @@
                     if (s.alpha<=0) spits.splice(i,1);
                     continue;
                 }
-                s.wx += SPIT_SPEED;
+                s.wx += SPIT_SPEED * s.dir;
 
                 // Check every obstacle — stop at first one hit
                 let blocked = false;
@@ -586,7 +589,7 @@
                         break;
                     }
                 }
-                if (!blocked && s.wx-camX > W+60) spits.splice(i,1);
+                if (!blocked && (s.wx-camX > W+60 || s.wx+SPIT_W < camX-60)) spits.splice(i,1);
             }
 
             // Enemies — move left, follow terrain, animate
@@ -661,14 +664,23 @@
         }
         function drawSpits() {
             for (const s of spits) {
-                const sx=s.wx-camX;
+                const sx = s.wx - camX;
                 ctx.save();
-                ctx.globalAlpha=s.alpha;
-                if (salivaImg.complete&&salivaImg.naturalWidth)
-                    ctx.drawImage(salivaImg,sx,s.y,SPIT_W,SPIT_H);
-                else {
-                    ctx.fillStyle='rgba(120,200,80,0.9)';
-                    ctx.beginPath(); ctx.ellipse(sx+SPIT_W/2,s.y+SPIT_H/2,SPIT_W/2,SPIT_H/2,0,0,Math.PI*2); ctx.fill();
+                ctx.globalAlpha = s.alpha;
+                if (salivaImg.complete && salivaImg.naturalWidth) {
+                    if (s.dir === -1) {
+                        // Flip around the centre of the spit sprite
+                        ctx.translate(sx + SPIT_W/2, s.y + SPIT_H/2);
+                        ctx.scale(-1, 1);
+                        ctx.drawImage(salivaImg, -SPIT_W/2, -SPIT_H/2, SPIT_W, SPIT_H);
+                    } else {
+                        ctx.drawImage(salivaImg, sx, s.y, SPIT_W, SPIT_H);
+                    }
+                } else {
+                    ctx.fillStyle = 'rgba(120,200,80,0.9)';
+                    ctx.beginPath();
+                    ctx.ellipse(sx+SPIT_W/2, s.y+SPIT_H/2, SPIT_W/2, SPIT_H/2, 0, 0, Math.PI*2);
+                    ctx.fill();
                 }
                 ctx.restore();
             }
