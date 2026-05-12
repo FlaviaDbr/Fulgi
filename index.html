@@ -70,12 +70,6 @@
             canvas.style.left   = Math.floor((vw - scaledW) / 2) + 'px';
             canvas.style.top    = Math.floor((vh - scaledH) / 2) + 'px';
             canvas.style.transform = '';
-            // Reposition the mobile name-input whenever the viewport changes
-            if (typeof positionMobileInput === 'function' &&
-                typeof mobileInput !== 'undefined' &&
-                mobileInput.style.display !== 'none') {
-                positionMobileInput();
-            }
         }
         fitToWindow();
         window.addEventListener('resize', fitToWindow);
@@ -516,6 +510,16 @@
             mobileInput.style.display = 'none';
             mobileInput.blur();
         }
+        // Reposition the input whenever the viewport changes (keyboard in/out, orientation)
+        function repositionIfVisible() {
+            if (mobileInput.style.display !== 'none') positionMobileInput();
+        }
+        window.addEventListener('resize', repositionIfVisible);
+        window.addEventListener('orientationchange', () => setTimeout(repositionIfVisible, 300));
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', repositionIfVisible);
+        }
+
         // Keep the game's nameInput variable in sync as the user types
         mobileInput.addEventListener('input', () => { nameInput = mobileInput.value; });
 
