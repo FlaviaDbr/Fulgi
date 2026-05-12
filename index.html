@@ -406,8 +406,9 @@
         const isTouch = navigator.maxTouchPoints > 0;
 
         // Only action buttons — movement uses half-screen tap zones instead
+        // w:h matches the source image aspect ratio 318:184
         const VBTNS = [
-            { id:'jump', x:16, y:H-96, w:82, h:82 },
+            { id:'jump', x:60, y:H-89, w:130, h:Math.round(130*184/318) },
         ];
 
         function touchToGame(touch) {
