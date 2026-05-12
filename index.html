@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Llama Cereal Runner</title>
+    <title>Fulgi Flavia Forever</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Intel+One+Mono:ital,wght@0,400;0,700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Intel+One+Mono:ital,wght@0,400;0,700&family=Spicy+Rice&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -132,10 +132,12 @@
         const techBroImg   = img('tech_bro-.png');
         const minionsImg   = img('minions-.png');
 
+        const jumpBtnImg = img('jump_button.png');
+
         // All images that must be attempted before the game starts
         const allImages = [llamaImg, boxBefore, boxAfter, salivaImg, floorImg,
                            bgImg, cornImg, doofImg, cowboyImg, alienImg,
-                           agentImg, techBroImg, minionsImg];
+                           agentImg, techBroImg, minionsImg, jumpBtnImg];
 
         // --- Floor layout ---
         const SVG_W = 9617.07, SVG_H = 1256.21;
@@ -300,6 +302,7 @@
             walkCycle=0; leanAngle=0; squash=1.0; wasOnGround=true; deathSpin=0;
             enemies=[]; doofTimer=1800; gameFrames=0; waveCount=0; // first wave after 30 s
             spawnObstacles();
+            hideMobileInput();
             state='playing';
         }
 
@@ -404,8 +407,7 @@
 
         // Only action buttons — movement uses half-screen tap zones instead
         const VBTNS = [
-            { id:'jump', x:16,   y:H-86, w:82, h:70, label:'↑'    },
-            { id:'spit', x:W-96, y:H-86, w:82, h:70, label:'PTIU' },
+            { id:'jump', x:W-96, y:H-96, w:82, h:82 },
         ];
 
         function touchToGame(touch) {
@@ -430,9 +432,16 @@
             e.preventDefault();
             if (state === 'start')       { reset(); return; }
             if (state === 'leaderboard') { reset(); return; }
-            if (state === 'name_input')  {
-                // Re-focus the input on every tap — this IS a user gesture,
-                // so iOS will show the virtual keyboard even if auto-focus failed.
+            if (state === 'name_input') {
+                for (const t of e.touches) {
+                    const g = touchToGame(t);
+                    // Done button hit area (matches what drawNameInput draws)
+                    if (g.x >= W/2-65 && g.x <= W/2+65 && g.y >= 262 && g.y <= 300) {
+                        submitName();
+                        return;
+                    }
+                }
+                // Any other tap: re-focus to keep keyboard open
                 mobileInput.focus();
                 return;
             }
@@ -455,7 +464,6 @@
                     if (id === 'jump' && player.onGround && state === 'playing') {
                         player.vy = JUMP_V; player.onGround = false;
                     }
-                    if (id === 'spit') triggerSpit();
                 }
             }
 
@@ -483,66 +491,51 @@
         canvas.addEventListener('touchend',   handleTouchEnd, { passive: false });
 
         // --- Mobile name input overlay ---
+        // The <input> is kept off-screen — it exists only to summon the virtual keyboard.
+        // All visual display (typed text, Done button) is drawn on the canvas.
         const mobileInput = document.getElementById('mobileNameInput');
         function positionMobileInput() {
-            // Always centre in the visible viewport — works in any orientation
-            // and stays above the virtual keyboard when it appears.
-            const vw = window.visualViewport ? window.visualViewport.width  : window.innerWidth;
-            const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-            const ox = window.visualViewport ? window.visualViewport.offsetLeft : 0;
-            const oy = window.visualViewport ? window.visualViewport.offsetTop  : 0;
-            const inputW = Math.min(280, vw - 40);
-            mobileInput.style.width    = inputW + 'px';
-            mobileInput.style.left     = Math.floor(ox + (vw - inputW) / 2) + 'px';
-            mobileInput.style.top      = Math.floor(oy + vh * 0.40) + 'px';
-            mobileInput.style.fontSize = '20px';
+            // Park it off-screen so it's focusable but invisible.
+            // font-size ≥ 16px prevents iOS from auto-zooming on focus.
+            mobileInput.style.left     = '-9999px';
+            mobileInput.style.top      = '0px';
+            mobileInput.style.width    = '1px';
+            mobileInput.style.fontSize = '16px';
+            mobileInput.style.opacity  = '0';
         }
         function showMobileInput() {
             if (!isTouch) return;
+            nameInput = '';
             mobileInput.value = '';
             positionMobileInput();
             mobileInput.style.display = 'block';
-            // focus() here may be ignored by iOS (not a user gesture).
-            // The canvas touchstart handler will re-focus on first tap.
             setTimeout(() => mobileInput.focus(), 50);
         }
         function hideMobileInput() {
             mobileInput.style.display = 'none';
             mobileInput.blur();
         }
-        // Reposition the input whenever the viewport changes (keyboard in/out, orientation)
-        function repositionIfVisible() {
-            if (mobileInput.style.display !== 'none') positionMobileInput();
-        }
-        window.addEventListener('resize', repositionIfVisible);
-        window.addEventListener('orientationchange', () => setTimeout(repositionIfVisible, 300));
-        if (window.visualViewport) {
-            window.visualViewport.addEventListener('resize', repositionIfVisible);
+        function submitName() {
+            const name = mobileInput.value.trim();
+            if (!name) return;
+            nameInput = name;
+            hideMobileInput();
+            lastName = nameInput;
+            saveScore(lastName, score);
+            if (score > bestScore) bestScore = score;
+            state = 'leaderboard';
         }
 
-        // Keep the game's nameInput variable in sync as the user types
+        // Sync typing → nameInput so the canvas can display it in real time
         mobileInput.addEventListener('input', () => { nameInput = mobileInput.value; });
-
+        // Android Return key
         mobileInput.addEventListener('keydown', e => {
-            if (e.key === 'Enter' && mobileInput.value.trim().length > 0) {
-                nameInput = mobileInput.value.trim();
-                hideMobileInput();
-                lastName = nameInput;
-                saveScore(lastName, score);
-                if (score > bestScore) bestScore = score;
-                state = 'leaderboard';
-            }
+            if (e.key === 'Enter') { e.preventDefault(); submitName(); }
         });
-        // Submit when user taps Done on the iOS / Android keyboard
+        // iOS keyboard "Done" button fires blur — only treat it as submit
+        // when the state is still name_input (not an accidental blur from elsewhere)
         mobileInput.addEventListener('blur', () => {
-            if (state === 'name_input' && mobileInput.value.trim().length > 0) {
-                nameInput = mobileInput.value.trim();
-                hideMobileInput();
-                lastName = nameInput;
-                saveScore(lastName, score);
-                if (score > bestScore) bestScore = score;
-                state = 'leaderboard';
-            }
+            if (state === 'name_input') submitName();
         });
 
         // --- Collision helpers ---
@@ -810,9 +803,9 @@
         }
         function drawHUD() {
             ctx.textAlign='right';
-            ctx.font=`bold 22px ${FONT}`; ctx.fillStyle='#222';
+            ctx.font=`bold 22px ${FONT}`; ctx.fillStyle='#fff';
             ctx.fillText(`Score: ${score}`,W-18,34);
-            ctx.font=`14px ${FONT}`; ctx.fillStyle='#999';
+            ctx.font=`14px ${FONT}`; ctx.fillStyle='rgba(255,255,255,0.7)';
             ctx.fillText(`Best: ${bestScore}`,W-18,54);
 
             // Mic indicator — bottom-left
@@ -852,22 +845,28 @@
             ctx.font=`16px ${FONT}`; ctx.fillStyle='#666';
             ctx.fillText('Enter your name:',W/2,190);
 
+            // Input box — shown on both desktop and mobile
+            const bw=320, bh=42, bx=W/2-bw/2, by=205;
+            ctx.fillStyle='#f9f9f9';
+            ctx.strokeStyle='#333'; ctx.lineWidth=2;
+            ctx.fillRect(bx,by,bw,bh);
+            ctx.strokeRect(bx,by,bw,bh);
+            const cursor = Math.floor(Date.now()/500)%2 ? '|' : '';
+            ctx.font=`20px ${FONT}`; ctx.fillStyle='#111';
+            ctx.fillText(nameInput+cursor, W/2, by+28);
+
             if (!isTouch) {
-                // Desktop: draw interactive input box on canvas
-                const bw=320, bh=42, bx=W/2-bw/2, by=205;
-                ctx.fillStyle='#f9f9f9';
-                ctx.strokeStyle='#333'; ctx.lineWidth=2;
-                ctx.fillRect(bx,by,bw,bh);
-                ctx.strokeRect(bx,by,bw,bh);
-                const cursor = Math.floor(Date.now()/500)%2 ? '|' : '';
-                ctx.font=`20px ${FONT}`; ctx.fillStyle='#111';
-                ctx.fillText(nameInput+cursor,W/2,by+28);
                 ctx.font=`13px ${FONT}`; ctx.fillStyle='#aaa';
-                ctx.fillText('Press ENTER to confirm',W/2,280);
+                ctx.fillText('Press ENTER to confirm', W/2, 280);
             } else {
-                // Mobile: HTML input overlay handles the actual typing
-                ctx.font=`14px ${FONT}`; ctx.fillStyle='#888';
-                ctx.fillText('Type in the box · tap Done to confirm',W/2,230);
+                // Done button
+                const dbx=W/2-65, dby=262, dbw=130, dbh=38;
+                ctx.fillStyle='#111';
+                ctx.beginPath(); ctx.roundRect(dbx,dby,dbw,dbh,8); ctx.fill();
+                ctx.fillStyle='#fff'; ctx.font=`bold 16px ${FONT}`;
+                ctx.fillText('Done  ✓', W/2, dby+25);
+                ctx.font=`12px ${FONT}`; ctx.fillStyle='#aaa';
+                ctx.fillText('or tap keyboard Done', W/2, 318);
             }
 
             ctx.textAlign='left';
@@ -932,31 +931,29 @@
             ctx.fillStyle='rgba(255,255,255,0.80)';
             ctx.fillRect(0,0,W,H);
             ctx.textAlign='center';
-            ctx.font=`bold 40px ${FONT}`; ctx.fillStyle='#111';
-            ctx.fillText('Llama Cereal Runner!',W/2,H/2-30);
+            ctx.font=`40px 'Spicy Rice', cursive`; ctx.fillStyle='#8c1717';
+            ctx.fillText('FULGI FLAVIA FOREVER',W/2,H/2-30);
             ctx.font=`18px ${FONT}`; ctx.fillStyle='#444';
-            ctx.fillText('← → move  |  SPACE jump  |  S spit',W/2,H/2+14);
+            ctx.fillText('← → move  |  SPACE jump',W/2,H/2+14);
+            ctx.font=`bold 18px ${FONT}`; ctx.fillStyle='#0bc4fc';
+            ctx.fillText('Say "PTIU" to spit', W/2, H/2+40);
             ctx.font=`14px ${FONT}`; ctx.fillStyle='#888';
-            ctx.fillText('Spit the boxes · jump the corn · press any key to start',W/2,H/2+44);
+            ctx.fillText('Spit the boxes · jump the corn · press any key to start',W/2,H/2+66);
             ctx.textAlign='left';
         }
 
         function drawTouchButtons() {
             ctx.save();
-            for (const b of VBTNS) {
-                ctx.globalAlpha = 0.42;
-                ctx.fillStyle   = '#fff';
+            const b = VBTNS[0]; // jump only
+            ctx.globalAlpha = 0.85;
+            if (jumpBtnImg.complete && jumpBtnImg.naturalWidth) {
+                ctx.drawImage(jumpBtnImg, b.x, b.y, b.w, b.h);
+            } else {
+                ctx.fillStyle = '#0bc4fc';
                 ctx.beginPath();
-                ctx.roundRect(b.x, b.y, b.w, b.h, 12);
+                ctx.roundRect(b.x, b.y, b.w, b.h, 14);
                 ctx.fill();
-                ctx.globalAlpha = 0.7;
-                ctx.fillStyle   = '#111';
-                ctx.font        = `bold ${b.label.length > 2 ? 13 : 22}px ${FONT}`;
-                ctx.textAlign   = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(b.label, b.x + b.w/2, b.y + b.h/2);
             }
-            ctx.textBaseline = 'alphabetic';
             ctx.restore();
         }
 
@@ -987,18 +984,20 @@
                 const alpha = gameFrames < 480 ? 1 : 1 - (gameFrames - 480) / 120;
                 const text = 'Say "PTIU" to spit';
                 ctx.save();
+                ctx.font = `bold 21px ${FONT}`;
+                const tw = ctx.measureText(text).width + 45;
+                const th = 45, ty = 10;
                 ctx.globalAlpha = alpha * 0.88;
-                const tw = ctx.measureText(text).width + 32;
-                ctx.font = `bold 15px ${FONT}`;
-                const tw2 = ctx.measureText(text).width;
-                ctx.fillStyle = '#111';
+                ctx.fillStyle = '#8c1717';
                 ctx.beginPath();
-                ctx.roundRect(W/2 - tw/2, 10, tw, 32, 8);
+                ctx.roundRect(W/2 - tw/2, ty, tw, th, 9);
                 ctx.fill();
                 ctx.globalAlpha = alpha;
                 ctx.fillStyle = '#fff';
                 ctx.textAlign = 'center';
-                ctx.fillText(text, W/2, 31);
+                ctx.textBaseline = 'middle';
+                ctx.fillText(text, W/2, ty + th/2);
+                ctx.textBaseline = 'alphabetic';
                 ctx.restore();
             }
         }
