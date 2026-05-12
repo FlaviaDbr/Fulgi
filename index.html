@@ -70,6 +70,12 @@
             canvas.style.left   = Math.floor((vw - scaledW) / 2) + 'px';
             canvas.style.top    = Math.floor((vh - scaledH) / 2) + 'px';
             canvas.style.transform = '';
+            // Reposition the mobile name-input whenever the viewport changes
+            if (typeof positionMobileInput === 'function' &&
+                typeof mobileInput !== 'undefined' &&
+                mobileInput.style.display !== 'none') {
+                positionMobileInput();
+            }
         }
         fitToWindow();
         window.addEventListener('resize', fitToWindow);
@@ -79,6 +85,24 @@
             window.visualViewport.addEventListener('resize', fitToWindow);
         }
         const FONT = '"Intel One Mono", "Courier New", monospace';
+
+        // roundRect polyfill for older mobile Safari / Chrome
+        if (!CanvasRenderingContext2D.prototype.roundRect) {
+            CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+                r = Math.min(r, w / 2, h / 2);
+                this.moveTo(x + r, y);
+                this.lineTo(x + w - r, y);
+                this.arcTo(x + w, y, x + w, y + r, r);
+                this.lineTo(x + w, y + h - r);
+                this.arcTo(x + w, y + h, x + w - r, y + h, r);
+                this.lineTo(x + r, y + h);
+                this.arcTo(x, y + h, x, y + h - r, r);
+                this.lineTo(x, y + r);
+                this.arcTo(x, y, x + r, y, r);
+                this.closePath();
+                return this;
+            };
+        }
 
         // --- Assets ---
         function img(src) { const i = new Image(); i.src = src; return i; }
@@ -113,6 +137,11 @@
         const agentImg     = img('secret_agent-.png');
         const techBroImg   = img('tech_bro-.png');
         const minionsImg   = img('minions-.png');
+
+        // All images that must be attempted before the game starts
+        const allImages = [llamaImg, boxBefore, boxAfter, salivaImg, floorImg,
+                           bgImg, cornImg, doofImg, cowboyImg, alienImg,
+                           agentImg, techBroImg, minionsImg];
 
         // --- Floor layout ---
         const SVG_W = 9617.07, SVG_H = 1256.21;
@@ -381,8 +410,8 @@
 
         // Only action buttons — movement uses half-screen tap zones instead
         const VBTNS = [
-            { id:'spit', x:16,   y:H-86, w:82, h:70, label:'PTIU' },
-            { id:'jump', x:W-96, y:H-86, w:82, h:70, label:'↑'    },
+            { id:'jump', x:16,   y:H-86, w:82, h:70, label:'↑'    },
+            { id:'spit', x:W-96, y:H-86, w:82, h:70, label:'PTIU' },
         ];
 
         function touchToGame(touch) {
@@ -407,7 +436,12 @@
             e.preventDefault();
             if (state === 'start')       { reset(); return; }
             if (state === 'leaderboard') { reset(); return; }
-            if (state === 'name_input')  return;
+            if (state === 'name_input')  {
+                // Re-focus the input on every tap — this IS a user gesture,
+                // so iOS will show the virtual keyboard even if auto-focus failed.
+                mobileInput.focus();
+                return;
+            }
 
             const curBtns = activeBtnIds(e.touches);
             let moveLeft = false, moveRight = false;
@@ -457,26 +491,34 @@
         // --- Mobile name input overlay ---
         const mobileInput = document.getElementById('mobileNameInput');
         function positionMobileInput() {
-            const r = canvas.getBoundingClientRect();
-            const scaleX = r.width  / W;
-            const scaleY = r.height / H;
-            // Centre it over the canvas input box (game coords ~W/2, 205–247)
-            mobileInput.style.left = (r.left + (W/2 - 140) * scaleX) + 'px';
-            mobileInput.style.top  = (r.top  + 210 * scaleY) + 'px';
-            mobileInput.style.width = (280 * scaleX) + 'px';
-            mobileInput.style.fontSize = (18 * scaleX) + 'px';
+            // Always centre in the visible viewport — works in any orientation
+            // and stays above the virtual keyboard when it appears.
+            const vw = window.visualViewport ? window.visualViewport.width  : window.innerWidth;
+            const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+            const ox = window.visualViewport ? window.visualViewport.offsetLeft : 0;
+            const oy = window.visualViewport ? window.visualViewport.offsetTop  : 0;
+            const inputW = Math.min(280, vw - 40);
+            mobileInput.style.width    = inputW + 'px';
+            mobileInput.style.left     = Math.floor(ox + (vw - inputW) / 2) + 'px';
+            mobileInput.style.top      = Math.floor(oy + vh * 0.40) + 'px';
+            mobileInput.style.fontSize = '20px';
         }
         function showMobileInput() {
             if (!isTouch) return;
             mobileInput.value = '';
             positionMobileInput();
             mobileInput.style.display = 'block';
-            mobileInput.focus();
+            // focus() here may be ignored by iOS (not a user gesture).
+            // The canvas touchstart handler will re-focus on first tap.
+            setTimeout(() => mobileInput.focus(), 50);
         }
         function hideMobileInput() {
             mobileInput.style.display = 'none';
             mobileInput.blur();
         }
+        // Keep the game's nameInput variable in sync as the user types
+        mobileInput.addEventListener('input', () => { nameInput = mobileInput.value; });
+
         mobileInput.addEventListener('keydown', e => {
             if (e.key === 'Enter' && mobileInput.value.trim().length > 0) {
                 nameInput = mobileInput.value.trim();
@@ -487,7 +529,7 @@
                 state = 'leaderboard';
             }
         });
-        // Also submit via blur (user taps away / hits Done on iOS)
+        // Submit when user taps Done on the iOS / Android keyboard
         mobileInput.addEventListener('blur', () => {
             if (state === 'name_input' && mobileInput.value.trim().length > 0) {
                 nameInput = mobileInput.value.trim();
@@ -786,7 +828,6 @@
 
         // --- Name input screen ---
         function drawNameInput() {
-            // Dimmed game in background
             ctx.fillStyle='rgba(255,255,255,0.82)';
             ctx.fillRect(0,0,W,H);
 
@@ -801,19 +842,23 @@
             ctx.font=`16px ${FONT}`; ctx.fillStyle='#666';
             ctx.fillText('Enter your name:',W/2,190);
 
-            // Input box
-            const bw=320, bh=42, bx=W/2-bw/2, by=205;
-            ctx.fillStyle='#f9f9f9';
-            ctx.strokeStyle='#333'; ctx.lineWidth=2;
-            ctx.fillRect(bx,by,bw,bh);
-            ctx.strokeRect(bx,by,bw,bh);
-
-            const cursor = Math.floor(Date.now()/500)%2 ? '|' : '';
-            ctx.font=`20px ${FONT}`; ctx.fillStyle='#111';
-            ctx.fillText(nameInput+cursor,W/2,by+28);
-
-            ctx.font=`13px ${FONT}`; ctx.fillStyle='#aaa';
-            ctx.fillText('Press ENTER to confirm',W/2,280);
+            if (!isTouch) {
+                // Desktop: draw interactive input box on canvas
+                const bw=320, bh=42, bx=W/2-bw/2, by=205;
+                ctx.fillStyle='#f9f9f9';
+                ctx.strokeStyle='#333'; ctx.lineWidth=2;
+                ctx.fillRect(bx,by,bw,bh);
+                ctx.strokeRect(bx,by,bw,bh);
+                const cursor = Math.floor(Date.now()/500)%2 ? '|' : '';
+                ctx.font=`20px ${FONT}`; ctx.fillStyle='#111';
+                ctx.fillText(nameInput+cursor,W/2,by+28);
+                ctx.font=`13px ${FONT}`; ctx.fillStyle='#aaa';
+                ctx.fillText('Press ENTER to confirm',W/2,280);
+            } else {
+                // Mobile: HTML input overlay handles the actual typing
+                ctx.font=`14px ${FONT}`; ctx.fillStyle='#888';
+                ctx.fillText('Type in the box · tap Done to confirm',W/2,230);
+            }
 
             ctx.textAlign='left';
         }
@@ -924,7 +969,7 @@
             if (isTouch) drawTouchButtons();
 
             if (state==='start')            drawStartOverlay();
-            else if (state==='name_input')  { if (!isTouch) drawNameInput(); }
+            else if (state==='name_input')  drawNameInput();
             else if (state==='leaderboard') drawLeaderboard();
 
             // "Say PTIU" snackbar — visible for first 10 s, fades out in last 2 s
@@ -950,9 +995,24 @@
 
         function loop() { update(); draw(); requestAnimationFrame(loop); }
 
-        initPlayer();
-        spawnObstacles();
-        loop();
+        function startWhenReady() {
+            if (allImages.every(img => img.complete)) {
+                initPlayer();
+                spawnObstacles();
+                loop();
+            } else {
+                ctx.fillStyle = '#b0b8c0';
+                ctx.fillRect(0, 0, W, H);
+                ctx.fillStyle = '#333';
+                ctx.font = `bold 20px ${FONT}`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('Loading…', W / 2, H / 2);
+                ctx.textBaseline = 'alphabetic';
+                requestAnimationFrame(startWhenReady);
+            }
+        }
+        startWhenReady();
     </script>
 </body>
 </html>
