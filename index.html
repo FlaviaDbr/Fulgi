@@ -700,11 +700,17 @@
             for (const obs of obstacles) {
                 const cb=obsBox(obs);
                 if (!overlaps(pb.l,pb.t,pb.r,pb.b,cb.l,cb.t,cb.r,cb.b)) continue;
-                const prevFeet=player.prevY-4;
-                if (prevFeet<=cb.t+2 && player.vy>=0) {
-                    player.y=cb.t+4; player.vy=0; player.onGround=true;
-                } else if (obs.type==='corn'||(obs.type==='box'&&obs.state==='normal')) {
-                    killPlayer(); return;
+                if (obs.type==='box') {
+                    // Boxes are collectibles — score on contact, llama passes through
+                    if (obs.state==='normal') { obs.state='hit'; score++; }
+                } else {
+                    // Corn: land on top or die
+                    const prevFeet=player.prevY-4;
+                    if (prevFeet<=cb.t+2 && player.vy>=0) {
+                        player.y=cb.t+4; player.vy=0; player.onGround=true;
+                    } else {
+                        killPlayer(); return;
+                    }
                 }
             }
         }
