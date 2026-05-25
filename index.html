@@ -252,7 +252,9 @@
             let wx=550;
             for (let i=0; i<600; i++) {
                 const type = Math.random()<0.25?'corn':'box';
-                obstacles.push({ wx, type, state:'normal' });
+                // 20% of boxes float ~100px above ground — must jump + spit to score
+                const lift = (type==='box' && Math.random()<0.20) ? 100 : 0;
+                obstacles.push({ wx, type, state:'normal', lift });
                 const obsW = type==='corn' ? CORN_W : BOX_W;
                 // Guarantee at least 2.3× llama widths of clear space after this obstacle
                 wx += obsW + Math.ceil(2.3 * CHAR_W) + Math.random()*300;
@@ -318,15 +320,20 @@
         }
 
         // --- Microphone: sharp sound spike → spit (Web Audio API, <30ms latency) ---
+        // Released when the tab is hidden and re-acquired on return, so the mic
+        // indicator doesn't stay on after the user switches away.
         let micState = 'off';
-        let micStarted = false;
+        let micStream = null;   // MediaStream — null when stopped
+        let micCtx    = null;   // AudioContext
+        let micRafId  = 0;      // tick() RAF id
         function startMic() {
-            if (micStarted) return;
-            micStarted = true;
+            if (micStream) return; // already running
             navigator.mediaDevices.getUserMedia({ audio: true, video: false })
                 .then(stream => {
+                    micStream = stream;
                     const AudioCtx = window.AudioContext || window.webkitAudioContext;
                     const actx     = new AudioCtx();
+                    micCtx = actx;
                     const analyser = actx.createAnalyser();
                     analyser.fftSize = 1024;
                     analyser.smoothingTimeConstant = 0.0;
@@ -337,6 +344,7 @@
                     let spikeCD  = 0;
 
                     function tick() {
+                        if (!micStream) return; // stopMic() was called
                         analyser.getByteTimeDomainData(buf);
                         let sum = 0;
                         for (let i = 0; i < buf.length; i++) {
@@ -350,23 +358,47 @@
                             triggerSpit();
                             spikeCD = 30;
                         }
-                        requestAnimationFrame(tick);
+                        micRafId = requestAnimationFrame(tick);
                     }
                     tick();
                     micState = 'listening';
                 })
                 .catch(() => { micState = 'off'; });
         }
+        function stopMic() {
+            if (micStream) {
+                micStream.getTracks().forEach(t => t.stop());
+                micStream = null;
+            }
+            if (micCtx) {
+                micCtx.close().catch(() => {});
+                micCtx = null;
+            }
+            if (micRafId) cancelAnimationFrame(micRafId);
+            micRafId = 0;
+            micState = 'off';
+        }
         // Start on first keyboard press OR first tap — whichever comes first
         document.addEventListener('keydown',   startMic, { once: true });
         document.addEventListener('touchstart', startMic, { once: true });
+
+        // Release the mic whenever the tab is backgrounded; resume on return.
+        // Permission is cached, so resuming doesn't re-prompt the user.
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) stopMic();
+            else                 startMic();
+        });
 
         // --- Input ---
         const keys = {};
         document.addEventListener('keydown', e => {
             // Name input mode: capture typing
             if (state === 'name_input') {
-                if (e.key === 'Enter' && nameInput.trim().length > 0) {
+                if (e.key === 'Escape') {
+                    // Skip name + leaderboard, start a new game
+                    hideMobileInput();
+                    reset();
+                } else if (e.key === 'Enter' && nameInput.trim().length > 0) {
                     lastName = nameInput.trim();
                     saveScore(lastName, score);
                     if (score > bestScore) bestScore = score;
@@ -434,16 +466,19 @@
             if (state === 'start')       { reset(); return; }
             if (state === 'leaderboard') { reset(); return; }
             if (state === 'name_input') {
+                let onDone = false, onBox = false;
                 for (const t of e.touches) {
                     const g = touchToGame(t);
-                    // Done button hit area (matches what drawNameInput draws)
-                    if (g.x >= W/2-65 && g.x <= W/2+65 && g.y >= 262 && g.y <= 300) {
-                        submitName();
-                        return;
-                    }
+                    // Done button (matches what drawNameInput draws)
+                    if (g.x >= W/2-65  && g.x <= W/2+65  && g.y >= 262 && g.y <= 300) onDone = true;
+                    // Name input box
+                    if (g.x >= W/2-160 && g.x <= W/2+160 && g.y >= 205 && g.y <= 247) onBox  = true;
                 }
-                // Any other tap: re-focus to keep keyboard open
-                mobileInput.focus();
+                if (onDone) { submitName(); return; }
+                if (onBox)  { mobileInput.focus(); return; }
+                // Tapped outside both — skip name + leaderboard, start a new game
+                hideMobileInput();
+                reset();
                 return;
             }
 
@@ -548,7 +583,8 @@
             const gy=getGroundY(obs.wx);
             const w=obs.type==='corn'?CORN_W:BOX_W;
             const h=obs.type==='corn'?CORN_H:(obs.state==='hit'?BOX_H_AFTER:BOX_H);
-            return { l:obs.wx, r:obs.wx+w, t:gy-h, b:gy, w, h };
+            const lift=obs.lift||0;
+            return { l:obs.wx, r:obs.wx+w, t:gy-h-lift, b:gy-lift, w, h };
         }
         function overlaps(ax1,ay1,ax2,ay2,bx1,by1,bx2,by2) {
             return ax2>bx1&&ax1<bx2&&ay2>by1&&ay1<by2;
@@ -622,7 +658,9 @@
             if (squash < 1.0) squash += (1.0 - squash) * 0.22;
             wasOnGround = player.onGround;
 
-            // Spit projectiles — stop and fade on first obstacle hit
+            // Spit projectiles — pass through corn and already-spat boxes;
+            // only fresh boxes and enemies block the spit. Hits only register
+            // while the spit is inside the visible frame.
             for (let i=spits.length-1; i>=0; i--) {
                 const s=spits[i];
                 if (s.fading) {
@@ -632,28 +670,29 @@
                 }
                 s.wx += SPIT_SPEED * s.dir;
 
-                // Check every obstacle — stop at first one hit
+                const onScreen = s.wx + SPIT_W >= camX && s.wx <= camX + W;
                 let blocked = false;
-                for (const obs of obstacles) {
-                    const cb=obsBox(obs);
-                    if (!overlaps(s.wx,s.y,s.wx+SPIT_W,s.y+SPIT_H,cb.l,cb.t,cb.r,cb.b)) continue;
-                    // Hit something — score if it's a fresh box, then fade regardless
-                    if (obs.type==='box' && obs.state==='normal') {
+
+                if (onScreen) {
+                    // Fresh boxes only — corn and 'hit' boxes are transparent to spit
+                    for (const obs of obstacles) {
+                        if (obs.type!=='box' || obs.state!=='normal') continue;
+                        const cb=obsBox(obs);
+                        if (!overlaps(s.wx,s.y,s.wx+SPIT_W,s.y+SPIT_H,cb.l,cb.t,cb.r,cb.b)) continue;
                         obs.state='hit'; score++;
-                    }
-                    s.fading=true;
-                    blocked=true;
-                    break;
-                }
-                // Also check enemies
-                if (!blocked) {
-                    for (const e of enemies) {
-                        if (e.hit) continue;
-                        if (!overlaps(s.wx,s.y,s.wx+SPIT_W,s.y+SPIT_H,
-                                      e.wx,e.y-e.H,e.wx+e.W,e.y)) continue;
-                        e.hit=true; e.vy=-22; e.spin=0;
                         s.fading=true; blocked=true;
                         break;
+                    }
+                    // Enemies
+                    if (!blocked) {
+                        for (const e of enemies) {
+                            if (e.hit) continue;
+                            if (!overlaps(s.wx,s.y,s.wx+SPIT_W,s.y+SPIT_H,
+                                          e.wx,e.y-e.H,e.wx+e.W,e.y)) continue;
+                            e.hit=true; e.vy=-22; e.spin=0;
+                            s.fading=true; blocked=true;
+                            break;
+                        }
                     }
                 }
                 if (!blocked && (s.wx-camX > W+60 || s.wx+SPIT_W < camX-60)) spits.splice(i,1);
@@ -693,22 +732,18 @@
                 }
             }
 
-            // Player vs obstacles
+            // Player vs obstacles — boxes are spit-only, so we only handle corn here
             const pb=playerBox();
             for (const obs of obstacles) {
+                if (obs.type!=='corn') continue;
                 const cb=obsBox(obs);
                 if (!overlaps(pb.l,pb.t,pb.r,pb.b,cb.l,cb.t,cb.r,cb.b)) continue;
-                if (obs.type==='box') {
-                    // Boxes are collectibles — score on contact, llama passes through
-                    if (obs.state==='normal') { obs.state='hit'; score++; }
+                // Corn: land on top or die
+                const prevFeet=player.prevY-4;
+                if (prevFeet<=cb.t+2 && player.vy>=0) {
+                    player.y=cb.t+4; player.vy=0; player.onGround=true;
                 } else {
-                    // Corn: land on top or die
-                    const prevFeet=player.prevY-4;
-                    if (prevFeet<=cb.t+2 && player.vy>=0) {
-                        player.y=cb.t+4; player.vy=0; player.onGround=true;
-                    } else {
-                        killPlayer(); return;
-                    }
+                    killPlayer(); return;
                 }
             }
         }
@@ -858,7 +893,7 @@
 
             if (!isTouch) {
                 ctx.font=`13px ${FONT}`; ctx.fillStyle='#aaa';
-                ctx.fillText('Press ENTER to confirm', W/2, 280);
+                ctx.fillText('Press ENTER to confirm  ·  ESC to skip', W/2, 280);
             } else {
                 // Done button
                 const dbx=W/2-65, dby=262, dbw=130, dbh=38;
@@ -867,7 +902,7 @@
                 ctx.fillStyle='#fff'; ctx.font=`bold 16px ${FONT}`;
                 ctx.fillText('Done  ✓', W/2, dby+25);
                 ctx.font=`12px ${FONT}`; ctx.fillStyle='#aaa';
-                ctx.fillText('or tap keyboard Done', W/2, 318);
+                ctx.fillText('or tap keyboard Done  ·  tap outside to skip', W/2, 318);
             }
 
             ctx.textAlign='left';
