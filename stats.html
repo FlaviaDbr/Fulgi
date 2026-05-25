@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fulgi Flavia Forever — Stats</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Intel+One+Mono:ital,wght@0,400;0,700&family=Spicy+Rice&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            min-height: 100vh;
+            background: #f5f1ea;
+            font-family: 'Intel One Mono', 'Courier New', monospace;
+            color: #111;
+            padding: 40px 20px;
+        }
+        .wrap {
+            max-width: 640px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-family: 'Spicy Rice', cursive;
+            color: #8c1717;
+            font-size: 44px;
+            text-align: center;
+            margin-bottom: 8px;
+            line-height: 1.1;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            font-size: 13px;
+            margin-bottom: 36px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+        .card {
+            background: #fff;
+            border: 2px solid #111;
+            border-radius: 10px;
+            padding: 24px 20px;
+            text-align: center;
+        }
+        .label {
+            font-size: 12px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            margin-bottom: 8px;
+        }
+        .value {
+            font-size: 42px;
+            font-weight: bold;
+            color: #8c1717;
+            line-height: 1;
+        }
+        .value.small { font-size: 28px; }
+        .conv {
+            text-align: center;
+            font-size: 14px;
+            color: #555;
+            margin-bottom: 32px;
+        }
+        .conv b { color: #111; }
+        .leaderboard {
+            background: #fff;
+            border: 2px solid #111;
+            border-radius: 10px;
+            padding: 20px;
+        }
+        .leaderboard h2 {
+            font-size: 16px;
+            margin-bottom: 14px;
+            text-align: center;
+            letter-spacing: 2px;
+        }
+        .row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 4px;
+            border-bottom: 1px dashed #eee;
+            font-size: 14px;
+        }
+        .row:last-child { border-bottom: none; }
+        .row .rank { width: 36px; }
+        .row .name { flex: 1; }
+        .row .score { font-weight: bold; color: #8c1717; }
+        .footer {
+            text-align: center;
+            margin-top: 32px;
+            font-size: 12px;
+            color: #aaa;
+        }
+        .footer a { color: #8c1717; text-decoration: none; }
+        .loading { color: #aaa; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <h1>FULGI FLAVIA FOREVER</h1>
+        <div class="subtitle">— STATS —</div>
+
+        <div class="stats">
+            <div class="card">
+                <div class="label">Sessions</div>
+                <div class="value" id="sessions">…</div>
+            </div>
+            <div class="card">
+                <div class="label">Plays</div>
+                <div class="value" id="plays">…</div>
+            </div>
+        </div>
+
+        <div class="conv" id="conv"></div>
+
+        <div class="leaderboard">
+            <h2>TOP SCORES</h2>
+            <div id="board" class="loading">Loading…</div>
+        </div>
+
+        <div class="footer">
+            <a href="index.html">← back to game</a>
+        </div>
+    </div>
+
+    <script>
+        const FB_URL = 'https://llama-db292-default-rtdb.europe-west1.firebasedatabase.app';
+
+        // shallow=true returns only keys, not values — fast count even with many entries
+        async function countNode(name) {
+            try {
+                const r = await fetch(`${FB_URL}/${name}.json?shallow=true`);
+                const data = await r.json();
+                return data ? Object.keys(data).length : 0;
+            } catch { return null; }
+        }
+
+        async function fetchBoard() {
+            try {
+                const r = await fetch(`${FB_URL}/leaderboard.json?orderBy="score"&limitToLast=10`);
+                const data = await r.json();
+                return data ? Object.values(data).sort((a, b) => b.score - a.score) : [];
+            } catch { return []; }
+        }
+
+        function fmt(n) { return n == null ? '—' : n.toLocaleString(); }
+
+        async function load() {
+            const [sessions, plays, board] = await Promise.all([
+                countNode('sessions'),
+                countNode('plays'),
+                fetchBoard(),
+            ]);
+
+            document.getElementById('sessions').textContent = fmt(sessions);
+            document.getElementById('plays').textContent    = fmt(plays);
+
+            // Conversion = how many sessions actually started a game
+            if (sessions && plays != null) {
+                const rate = (100 * plays / sessions).toFixed(0);
+                document.getElementById('conv').innerHTML =
+                    `<b>${rate}%</b> of visitors started a game · avg <b>${(plays/sessions).toFixed(1)}</b> plays per session`;
+            }
+
+            const boardEl = document.getElementById('board');
+            if (!board.length) {
+                boardEl.textContent = 'No scores yet.';
+                return;
+            }
+            boardEl.classList.remove('loading');
+            const medals = ['🥇','🥈','🥉'];
+            boardEl.innerHTML = board.map((row, i) => `
+                <div class="row">
+                    <span class="rank">${i < 3 ? medals[i] : (i+1) + '.'}</span>
+                    <span class="name">${row.name.replace(/</g, '&lt;')}</span>
+                    <span class="score">${row.score}</span>
+                </div>
+            `).join('');
+        }
+
+        load();
+    </script>
+</body>
+</html>
