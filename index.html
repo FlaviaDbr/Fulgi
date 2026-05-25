@@ -327,6 +327,17 @@
         // Pre-warm the cache on page load so the first leaderboard view is current
         fetchLeaderboard();
 
+        // --- Analytics: count sessions + plays in the same Firebase DB ---
+        // Each event becomes a new row under /sessions or /plays — count them
+        // in the Firebase console to see totals.
+        function logEvent(name) {
+            fetch(`${FB_URL}/${name}.json`, {
+                method: 'POST',
+                body: JSON.stringify({ ts: Date.now() }),
+            }).catch(() => {}); // silent fail — analytics aren't critical
+        }
+        logEvent('sessions'); // fires once per page load
+
         // --- State ---
         // 'start' | 'playing' | 'name_input' | 'leaderboard'
         let state = 'start', score = 0, bestScore = 0;
@@ -411,6 +422,7 @@
             spawnObstacles();
             hideMobileInput();
             state='playing';
+            logEvent('plays'); // count each game start
         }
 
         // --- Spit helper (keyboard + mic both call this) ---
