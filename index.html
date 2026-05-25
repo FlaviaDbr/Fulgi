@@ -250,10 +250,16 @@
         function spawnObstacles() {
             obstacles=[];
             let wx=550;
+            let boxCount=0;
             for (let i=0; i<600; i++) {
                 const type = Math.random()<0.25?'corn':'box';
-                // 20% of boxes float ~100px above ground — must jump + spit to score
-                const lift = (type==='box' && Math.random()<0.20) ? 100 : 0;
+                // 20% of boxes float ~100px above ground — must jump + spit to score.
+                // First 4 boxes stay grounded so the player learns the mechanic first.
+                let lift = 0;
+                if (type==='box') {
+                    boxCount++;
+                    if (boxCount > 4 && Math.random()<0.20) lift = 100;
+                }
                 obstacles.push({ wx, type, state:'normal', lift });
                 const obsW = type==='corn' ? CORN_W : BOX_W;
                 // Guarantee at least 2.3× llama widths of clear space after this obstacle
