@@ -215,18 +215,49 @@
         // --- Physics ---
         const WALK_SPEED=4, GRAVITY=0.55, JUMP_V=-14, CAM_OFFSET=210;
 
-        // --- Leaderboard (localStorage) ---
-        function getLeaderboard() {
-            try { return JSON.parse(localStorage.getItem('llamaLeaderboard') || '[]'); }
-            catch { return []; }
+        // --- Leaderboard (Firebase Realtime DB; localStorage = offline fallback) ---
+        const FB_URL = 'https://llama-db292-default-rtdb.europe-west1.firebasedatabase.app';
+        let cachedBoard = [];
+        // Warm-start from local cache so the screen isn't blank while online fetch resolves
+        try { cachedBoard = JSON.parse(localStorage.getItem('llamaLeaderboard') || '[]'); }
+        catch { cachedBoard = []; }
+
+        function getLeaderboard() { return cachedBoard; }
+
+        async function fetchLeaderboard() {
+            try {
+                const r = await fetch(`${FB_URL}/leaderboard.json?orderBy="score"&limitToLast=10`);
+                const data = await r.json();
+                const entries = data ? Object.values(data) : [];
+                entries.sort((a, b) => b.score - a.score);
+                cachedBoard = entries.slice(0, 10);
+                localStorage.setItem('llamaLeaderboard', JSON.stringify(cachedBoard));
+            } catch (err) {
+                // Offline or Firebase unreachable — keep showing the local cache
+            }
         }
-        function saveScore(name, s) {
-            const board = getLeaderboard();
-            board.push({ name: name.trim() || 'Anonymous', score: s });
-            board.sort((a, b) => b.score - a.score);
-            if (board.length > 10) board.length = 10;
-            localStorage.setItem('llamaLeaderboard', JSON.stringify(board));
+
+        async function saveScore(name, s) {
+            const entry = { name: name.trim() || 'Anonymous', score: s };
+            // Optimistic local update so the new score appears instantly
+            cachedBoard.push(entry);
+            cachedBoard.sort((a, b) => b.score - a.score);
+            if (cachedBoard.length > 10) cachedBoard.length = 10;
+            localStorage.setItem('llamaLeaderboard', JSON.stringify(cachedBoard));
+            // Send to Firebase, then re-fetch the authoritative top 10
+            try {
+                await fetch(`${FB_URL}/leaderboard.json`, {
+                    method: 'POST',
+                    body: JSON.stringify(entry),
+                });
+                fetchLeaderboard();
+            } catch (err) {
+                // Score is preserved locally — will not sync to global board this time
+            }
         }
+
+        // Pre-warm the cache on page load so the first leaderboard view is current
+        fetchLeaderboard();
 
         // --- State ---
         // 'start' | 'playing' | 'name_input' | 'leaderboard'
