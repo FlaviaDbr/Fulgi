@@ -22,26 +22,86 @@
             transform-origin: top left;
             touch-action: none;
         }
-        #mobileNameInput {
+        /* Full-screen overlay shown on mobile when entering a name after death.
+           Sits above the canvas so the keyboard can't shrink the visible game. */
+        #nameOverlay {
             display: none;
-            position: absolute;
-            z-index: 10;
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            background: rgba(255,255,255,0.96);
             font-family: 'Intel One Mono', 'Courier New', monospace;
-            font-size: 20px;
-            padding: 8px 14px;
+            color: #111;
+        }
+        #nameOverlayContent {
+            position: absolute;
+            top: 12px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            padding: 0 16px;
+        }
+        #nameTitle {
+            font-size: 26px;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+        #nameScoreText {
+            font-size: 15px;
+            color: #444;
+            margin-bottom: 12px;
+        }
+        #nameRow {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            align-items: stretch;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        #mobileNameInput {
+            font-family: inherit;
+            font-size: 18px;     /* ≥16px keeps iOS from auto-zooming on focus */
+            padding: 8px 12px;
             border: 2px solid #333;
             border-radius: 6px;
             background: #f9f9f9;
             color: #111;
             outline: none;
-            width: 280px;
+            width: 220px;
             text-align: center;
+        }
+        #doneBtn {
+            font-family: inherit;
+            font-size: 15px;
+            font-weight: bold;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            background: #111;
+            color: #fff;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        #nameHint {
+            font-size: 12px;
+            color: #888;
         }
     </style>
 </head>
 <body>
     <canvas id="game" width="900" height="420"></canvas>
-    <input id="mobileNameInput" type="text" maxlength="15" placeholder="your name…" autocomplete="off" autocorrect="off" spellcheck="false">
+    <div id="nameOverlay">
+        <div id="nameOverlayContent">
+            <div id="nameTitle">SPLAT!</div>
+            <div id="nameScoreText">You splatted 0 boxes</div>
+            <div id="nameRow">
+                <input id="mobileNameInput" type="text" maxlength="15" placeholder="your name…" autocomplete="off" autocorrect="off" spellcheck="false">
+                <button id="doneBtn" type="button">Done ✓</button>
+            </div>
+            <div id="nameHint">Tap outside the box to skip</div>
+        </div>
+    </div>
 
     <script>
         const canvas = document.getElementById('game');
@@ -57,11 +117,11 @@
         ctx.imageSmoothingQuality = 'high';
 
         // Scale canvas to fill window while preserving 900×420 aspect ratio.
-        // Uses visualViewport when available — gives accurate dimensions on mobile
-        // even when the browser chrome (address bar) is visible.
+        // Uses window.innerWidth/Height — these stay stable when the on-screen
+        // keyboard opens, so the canvas doesn't shrink during name entry.
         function fitToWindow() {
-            const vw = (window.visualViewport ? window.visualViewport.width  : window.innerWidth);
-            const vh = (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
             const scale  = Math.min(vw / W, vh / H);
             const scaledW = Math.floor(W * scale);
             const scaledH = Math.floor(H * scale);
@@ -75,9 +135,6 @@
         window.addEventListener('resize', fitToWindow);
         // Orientation change: browser needs ~300 ms to update its dimensions
         window.addEventListener('orientationchange', () => setTimeout(fitToWindow, 300));
-        if (window.visualViewport) {
-            window.visualViewport.addEventListener('resize', fitToWindow);
-        }
         const FONT = '"Intel One Mono", "Courier New", monospace';
 
         // roundRect polyfill for older mobile Safari / Chrome
@@ -564,28 +621,26 @@
         canvas.addEventListener('touchend',   handleTouchEnd, { passive: false });
 
         // --- Mobile name input overlay ---
-        // The <input> is kept off-screen — it exists only to summon the virtual keyboard.
-        // All visual display (typed text, Done button) is drawn on the canvas.
+        // A real HTML overlay (input + Done button) sits above the canvas during
+        // name entry. The overlay is fixed-positioned and not affected by the
+        // visualViewport shrinking when the keyboard opens, so the controls stay
+        // visible at the top of the screen.
         const mobileInput = document.getElementById('mobileNameInput');
-        function positionMobileInput() {
-            // Park it off-screen so it's focusable but invisible.
-            // font-size ≥ 16px prevents iOS from auto-zooming on focus.
-            mobileInput.style.left     = '-9999px';
-            mobileInput.style.top      = '0px';
-            mobileInput.style.width    = '1px';
-            mobileInput.style.fontSize = '16px';
-            mobileInput.style.opacity  = '0';
-        }
+        const nameOverlay = document.getElementById('nameOverlay');
+        const nameScoreText = document.getElementById('nameScoreText');
+        const doneBtn = document.getElementById('doneBtn');
+
         function showMobileInput() {
             if (!isTouch) return;
             nameInput = '';
             mobileInput.value = '';
-            positionMobileInput();
-            mobileInput.style.display = 'block';
+            nameScoreText.textContent = `You splatted ${score} box${score===1?'':'es'}`;
+            nameOverlay.style.display = 'block';
+            // Delay focus until display:block has applied so iOS actually opens the keyboard
             setTimeout(() => mobileInput.focus(), 50);
         }
         function hideMobileInput() {
-            mobileInput.style.display = 'none';
+            nameOverlay.style.display = 'none';
             mobileInput.blur();
         }
         function submitName() {
@@ -599,16 +654,20 @@
             state = 'leaderboard';
         }
 
-        // Sync typing → nameInput so the canvas can display it in real time
+        // Keep nameInput in sync so the desktop canvas preview still works
         mobileInput.addEventListener('input', () => { nameInput = mobileInput.value; });
-        // Android Return key
+        // Enter / Return on the on-screen keyboard submits
         mobileInput.addEventListener('keydown', e => {
             if (e.key === 'Enter') { e.preventDefault(); submitName(); }
         });
-        // iOS keyboard "Done" button fires blur — only treat it as submit
-        // when the state is still name_input (not an accidental blur from elsewhere)
-        mobileInput.addEventListener('blur', () => {
-            if (state === 'name_input') submitName();
+        // Done button — submit (stopPropagation so it doesn't trigger overlay-skip)
+        doneBtn.addEventListener('click', e => { e.stopPropagation(); submitName(); });
+        // Tap inside the input — keep focus, don't bubble to overlay-skip handler
+        mobileInput.addEventListener('click', e => e.stopPropagation());
+        // Tap anywhere else in the overlay — skip name + leaderboard, start new game
+        nameOverlay.addEventListener('click', () => {
+            hideMobileInput();
+            reset();
         });
 
         // --- Collision helpers ---
